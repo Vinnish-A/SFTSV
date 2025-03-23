@@ -1,0 +1,216 @@
+---
+title: "Genome-wide CRISPR screening identifies LRP1 as an entry factor for SFTSV"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+seed = 42
+
+set.seed(seed)
+
+library(bioScript)
+library(tidyverse)
+library(ggsci)
+library(ggrepel)
+library(readxl)
+library(writexl)
+library(cowplot)
+
+genesummary = read_xlsx('supplementary/supplementary.xlsx')
+countsummary = read_tsv("supplementary/countsummary.txt") |> 
+  mutate(Label = c("SFTSV-2", "SFTSV-1", "Mock-2", "Mock-1"))
+
+highlight = 'Insig2, Ccr2, Lman2, Rtn2, Lrp1, Islr2, TMEM243, Tmem90b' |> 
+  str_split_1(',') |> 
+  trimws() |> 
+  str_to_title()
+```
+
+This repository serves as a resource to share, archive, and ensure the reproducibility of the codes and scripts used in our research projects "Genome-wide CRISPR screening identifies LRP1 as an entry factor for SFTSV".
+
+
+## Differential Analysis
+
+```{r warning=FALSE, message=FALSE}
+highlight_diff = highlight
+src_diff = genesummary |> 
+  mutate(Gene = ifelse(Gene == 'Syndig1', 'Tmem90b', Gene), 
+         is_mp = ifelse(Gene %in% highlight_diff, 'mp', 'not'), 
+         pvalue = `pos|Pvalue`, 
+         lfc = `pos|LFC`, 
+         class = ifelse(Gene %in% highlight_diff, 'highlighted', 'not'), 
+         text = ifelse(Gene %in% highlight_diff, Gene, NA), 
+         alpha = ifelse(Gene %in% highlight_diff, 1, 0.3))
+
+p_diff = src_diff |> 
+  ggplot(aes(lfc, - log10(pvalue))) +
+  geom_point(aes(alpha = alpha, color = class)) + 
+  geom_label_repel(aes(label = text), max.overlaps = Inf, size = 3) +
+  scale_color_manual(values = c('highlighted' = 'red', 'not' = 'black')) +
+  xlab('Log2(Fold Change)') +
+  ylab('-Log10(pvalue)') + 
+  guides(color = 'none', alpha = 'none') +
+  scale_x_continuous(breaks = seq(-10, 5, by = 1)) +
+  theme_classic() +
+  theme(axis.text = element_text(face = 'bold'))
+
+genesummary |> 
+  select(Gene, `pos|LFC`, `pos|Pvalue`) |> 
+  write_csv('src_ps.csv') |> 
+  withPath('src')
+
+withPath(ggsave('p_diff.png', p_diff, width = 4.5*sf, height = 3*sf), 'result', sf = 0.85)
+
+knitr::include_graphics('result/p_diff.png')
+```
+
+## QC
+
+Quality control: 
+
+```{r warning=FALSE, message=FALSE}
+lst_plot = list()
+lst_plot[['Mapped_Ratio']] = countsummary |> 
+  select(Label, Reads, Mapped) |> 
+  mutate(Reads = Reads - Mapped) |> 
+  rename(Unmapped = Reads) |> 
+  pivot_longer(-Label, names_to = 'Terms', values_to = 'Num') |> 
+  ggplot() + 
+  geom_bar(aes(x = Label, y = Num, fill = Terms), stat = 'summary', position = 'stack') +
+  labs(title = 'Mapped Ratio') +
+  xlab('') +
+  ylab('') + 
+  scale_fill_nejm() +
+  theme_classic() +
+  theme(legend.position = 'top', 
+        plot.title = element_text(hjust = 0.5, face = 'bold', size = 16),
+        legend.text = element_text(size = 12),
+        legend.title = element_blank(), 
+        axis.text.y = element_text(size = 14, face = 'bold'), 
+        axis.text.x = element_text(size = 14, face = 'bold', angle = 30,vjust = 0.85,hjust = 0.75), 
+        legend.margin = margin(t = -0.2, unit = 'cm'), 
+        axis.text = element_text(size = 14, face = 'bold'))
+
+lst_plot[['Gini_Index']] = countsummary |> 
+  ggplot() + 
+  geom_bar(aes(x = Label, y = GiniIndex, fill = Label), stat = 'summary', position = 'dodge') +
+  labs(title = 'Evenness of Screen') +
+  xlab('') +
+  ylab('Gini Index') + 
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_fill_nejm() +
+  theme_classic() +
+  theme(legend.position = 'none', 
+        plot.title = element_text(hjust = 0.5, face = 'bold', size = 16),
+        legend.text = element_text(size = 12),
+        legend.title = element_blank(), 
+        legend.margin = margin(t = -0.2, unit = 'cm'), 
+        axis.title.y = element_text(size = 14, face = 'bold'), 
+        axis.text = element_text(size = 14, face = 'bold'), 
+        axis.text.x = element_text(size = 14, angle = 30,vjust = 0.85,hjust = 0.75))
+
+lst_plot[['Zero_Counts_Ratio']] = countsummary |> 
+  ggplot() + 
+  geom_bar(aes(x = Label, y = TotalsgRNAs), stat = 'summary', position = 'dodge') +
+  scale_fill_nejm() +
+  geom_bar(aes(x = Label, y = Zerocounts, fill = Label), stat = 'summary', position = 'dodge') +
+  labs(title = 'Zero Counts Ratio in sgRNAs') +
+  xlab('') +
+  ylab('') + 
+  theme_classic() +
+  theme(legend.position = 'none', 
+        plot.title = element_text(hjust = 0.5, face = 'bold', size = 16),
+        legend.text = element_text(size = 12),
+        legend.title = element_blank(), 
+        legend.margin = margin(t = -0.2, unit = 'cm'), 
+        axis.text = element_text(size = 14, face = 'bold'), 
+        axis.text.x = element_text(angle = 30, vjust = 0.85, hjust = 0.75))
+
+withPath(write_csv(countsummary, 'src_S1B.csv'), 'src')
+withPath(
+  walk2(lst_plot, names(lst_plot), ~ ggsave(paste0(.y, '.png'), .x, width = 4, height = 3)), 
+  'result'
+)
+
+plot_grid(plotlist = lst_plot)
+```
+
+
+## Beta
+
+Visualization of beta value distribution calculated by MAGeCK software: 
+
+```{r warning=FALSE, message=FALSE}
+highlight_beta = highlight
+src_beta = genesummary |> 
+  select(Gene, Beta) |> 
+  mutate(mp = ifelse(Gene %in% highlight_beta, Gene, NA), 
+         rankBeta = round(rank(-Beta))) |> 
+  arrange(-rankBeta) |> 
+  mutate(mp = factor(mp, levels = mp))
+
+p_beta = ggplot() + 
+  geom_line(data = src_beta, aes(x = rankBeta, y = Beta)) +
+  geom_point(data = src_beta |> drop_na(), aes(x = rankBeta, y = Beta, color = mp, size = 1)) +
+  scale_colour_viridis_d() +
+  theme_bw() +
+  guides(size = 'none', color = guide_legend(title = element_blank(), ncol = 1, reverse = T, override.aes = list(size = 2.5))) + 
+  scale_colour_viridis_d() +
+  labs(title = 'Distribution of Beta Score \n for Membrane Pro') +
+  xlab('Genes') +
+  ylab('Beta Score') +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 12),
+    legend.text = element_text(size = 10),
+    axis.text = element_text(face = 'bold'),
+    axis.title = element_text(face = 'bold')
+  )
+
+src_beta |> 
+  select(-mp) |> 
+  write_csv('src_beta.csv') |> 
+  withPath('src')
+
+withPath(ggsave('Beta.png', p_beta, width = 3.5, height = 2.5), 'result')
+
+knitr::include_graphics('result/Beta.png')
+```
+
+## PARP
+
+Visualization of beta value distribution of PARP family protein in positive selection: 
+
+```{r warning=FALSE, message=FALSE}
+highlight_parp = genesummary$Gene |> str_subset('Parp')
+src_parp = genesummary |>
+  mutate(Gene = ifelse(Gene == 'Syndig1', 'Tmem90b', Gene),
+         is_mp = ifelse(Gene %in% highlight_parp, 'mp', 'not'),
+         pvalue = `pos|Pvalue`,
+         lfc = `pos|LFC`,
+         class = ifelse(Gene %in% highlight_parp, 'highlighted', 'not'),
+         text = ifelse(Gene %in% highlight_parp, Gene, NA),
+         alpha = ifelse(Gene %in% highlight_parp, 1, 0.3))
+
+p_parp = src_parp |>
+  ggplot(aes(lfc, - log10(pvalue))) +
+  geom_point(aes(alpha = alpha, color = class)) +
+  geom_label_repel(aes(label = text), max.overlaps = Inf, size = 3) +
+  scale_color_manual(values = c('highlighted' = 'red', 'not' = 'black')) +
+  xlab('Log2(Fold Change)') +
+  ylab('-Log10(pvalue)') +
+  guides(color = 'none', alpha = 'none') +
+  scale_x_continuous(breaks = seq(-10, 5, by = 1)) +
+  theme_classic() +
+  theme(axis.text = element_text(face = 'bold'))
+
+src_parp |> 
+  write_csv('src_prap.csv') |> 
+  withPath('src')
+
+withPath(ggsave('Parp.png', p_parp, width = 4.5*sf, height = 3*sf), 'result', sf = 0.85)
+
+knitr::include_graphics('result/Parp.png')
+```
